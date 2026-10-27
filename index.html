@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photo Diary PWA</title>
+    <!-- Tailwind CSS & DaisyUI CDN -->
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- PWA Manifest via Data URI -->
+    <link rel="manifest" href="data:application/manifest+json;charset=utf-8,%7B%22name%22%3A%22Photo%20Diary%22%2C%22short_name%22%3A%22Diary%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%23ffffff%22%2C%22theme_color%22%3A%22%233b82f6%22%2C%22icons%22%3A%5B%5D%7D">
+</head>
+<body class="bg-base-200 min-h-screen flex flex-col">
+
+    <!-- Navbar -->
+    <div class="navbar bg-base-100 shadow-md px-4">
+        <div class="flex-1">
+            <span class="text-xl font-bold flex items-center gap-2">
+                <i data-lucide="camera" class="w-6 h-6 text-primary"></i> Photo Diary
+            </span>
+        </div>
+        <div class="flex-none gap-2">
+            <!-- Theme Toggle Button -->
+            <button id="themeToggle" class="btn btn-ghost btn-circle">
+                <i data-lucide="moon" class="w-5 h-5" id="themeIcon"></i>
+            </button>
+            <button onclick="openModal()" class="btn btn-primary btn-sm flex items-center gap-1">
+                <i data-lucide="plus" class="w-4 h-4"></i> Add Memory
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="container mx-auto p-4 flex-1 max-w-4xl">
+        <div id="galleryGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            <!-- Dynamic Cards Will Be Inserted Here -->
+        </div>
+        <div id="emptyState" class="text-center py-20 hidden">
+            <i data-lucide="image-off" class="w-16 h-16 mx-auto text-base-content opacity-30 mb-2"></i>
+            <p class="text-base-content opacity-60">No memories saved yet. Click "Add Memory" to start!</p>
+        </div>
+    </main>
+
+    <!-- Add Memory Modal -->
+    <dialog id="addModal" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg mb-4 flex items-center gap-2">
+                <i data-lucide="upload" class="w-5 h-5"></i> New Photo Memory
+            </h3>
+            <form id="memoryForm" class="space-y-4">
+                <div>
+                    <label class="label"><span class="label-text">Select Image</span></label>
+                    <input type="file" id="imageInput" accept="image/*" class="file-input file-input-bordered w-full" required />
+                </div>
+                <div>
+                    <label class="label"><span class="label-text">Caption</span></label>
+                    <textarea id="captionInput" class="textarea textarea-bordered w-full" placeholder="What's on your mind?" required></textarea>
+                </div>
+                <div class="modal-action">
+                    <button type="button" onclick="closeModal()" class="btn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Memory</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // Initialize Lucide Icons
+        lucide.createIcons();
+
+        // Register Service Worker for PWA via Blob URL
+        if ('serviceWorker' in navigator) {
+            const swCode = `
+                self.addEventListener('install', e => self.skipWaiting());
+                self.addEventListener('activate', e => self.clients.claim());
+                self.addEventListener('fetch', e => {});
+            `;
+            const swBlob = new Blob([swCode], { type: 'text/javascript' });
+            navigator.serviceWorker.register(URL.createObjectURL(swBlob)).catch(err => console.log('SW registration failed:', err));
+        }
+
+        // Theme Toggle Logic
+        const themeToggle = document.getElementById('themeToggle');
+        const themeIcon = document.getElementById('themeIcon');
+        themeToggle.addEventListener('click', () => {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            html.setAttribute('data-theme', newTheme);
+            themeIcon.setAttribute('data-lucide', newTheme === 'light' ? 'moon' : 'sun');
+            lucide.createIcons();
+        });
+
+        // IndexedDB Setup for Efficient Blob Storage
+        const dbName = 'PhotoDiaryDB';
+        const storeName = 'memories';
+        let db;
+
+        const request = indexedDB.open(dbName, 1);
+        request.onerror = (event) => console.error('IndexedDB error:', event.target.error);
+        request.onsuccess = (event) => {
+            db = event.target.result;
+            loadMemories();
+        };
+        request.onupgradeneeded = (event) => {
+            db = event.target.result;
+            if (!db.objectStoreNames.contains(storeName)) {
+                db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
+            }
+        };
+
+        // Modal Functions
+        const modal = document.getElementById('addModal');
+        function openModal() { modal.showModal(); }
+        function closeModal() { modal.close(); document.getElementById('memoryForm').reset(); }
+
+        // Handle Form Submit
+        document.getElementById('memoryForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('imageInput');
+            const captionInput = document.getElementById('captionInput');
+
+            if (fileInput.files.length === 0) return;
+
+            const file = fileInput.files[0];
+            const transaction = db.transaction([storeName], 'readwrite');
+            const store = transaction.objectStore(storeName);
+
+            // Store raw Blob/File directly in IndexedDB (No Base64!)
+            const record = {
+                imageBlob: file,
+                caption: captionInput.value,
+                date: new Date().toLocaleDateString()
+            };
+
+            const req = store.add(record);
+            req.onsuccess = () => {
+                closeModal();
+                loadMemories();
+            };
+            req.onerror = (err) => console.error('Error saving memory:', err);
+        });
+
+        // Load and Render Memories
+        function loadMemories() {
+            if (!db) return;
+            const transaction = db.transaction([storeName], 'readonly');
+            const store = transaction.objectStore(storeName);
+            const request = store.getAll();
+
+            request.onsuccess = (event) => {
+                const memories = event.target.result;
+                const grid = document.getElementById('galleryGrid');
+                const emptyState = document.getElementById('emptyState');
+                grid.innerHTML = '';
+
+                if (memories.length === 0) {
+                    emptyState.classList.remove('hidden');
+                    return;
+                }
+                emptyState.classList.add('hidden');
+
+                memories.reverse().forEach(memory => {
+                    // Create object URL from Blob for efficient rendering
+                    const imageUrl = URL.createObjectURL(memory.imageBlob);
+
+                    const card = document.createElement('div');
+                    card.className = 'card bg-base-100 shadow-xl overflow-hidden';
+                    card.innerHTML = `
+                        <figure class="h-48 overflow-hidden bg-base-300">
+                            <img src="${imageUrl}" alt="Memory" class="w-full h-full object-cover" />
+                        </figure>
+                        <div class="card-body p-4">
+                            <p class="text-xs opacity-60">${memory.date}</p>
+                            <p class="text-sm font-medium">${escapeHtml(memory.caption)}</p>
+                            <div class="card-actions justify-end mt-2">
+                                <button onclick="deleteMemory(${memory.id})" class="btn btn-ghost btn-xs text-error">
+                                    <i data-lucide="trash-2" class="w-4 h-4"></i> Delete
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    grid.appendChild(card);
+                });
+                lucide.createIcons();
+            };
+        }
+
+        // Delete Memory
+        function deleteMemory(id) {
+            const transaction = db.transaction([storeName], 'readwrite');
+            const store = transaction.objectStore(storeName);
+            const req = store.delete(id);
+            req.onsuccess = () => loadMemories();
+        }
+
+        // Helper to prevent XSS
+        function escapeHtml(text) {
+            const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+    </script>
+</body>
+</html>
